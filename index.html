@@ -11,7 +11,7 @@
     /* --- LOGIN OVERLAY STYLES --- */
     #login-overlay {
         position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-        background: #111827; /* Màu nền tối */
+        background: #111827;
         z-index: 9999;
         display: flex; justify-content: center; align-items: center; flex-direction: column;
         transition: opacity 0.5s ease;
@@ -30,6 +30,9 @@
         border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 16px;
     }
     .login-box button:hover { background: #1d4ed8; }
+    
+    /* Tin nhắn chặn IP (Mới thêm) */
+    #blocked-msg { color: #dc2626; font-weight: bold; display: none; margin-top: 15px; border: 1px solid #dc2626; padding: 10px; border-radius: 6px; background: #fee2e2; }
 
     /* --- MAIN APP STYLES --- */
     .container { background: white; padding: 32px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); width: 650px; max-width: 100%; opacity: 0; transition: opacity 1s; }
@@ -60,6 +63,7 @@
         <p style="font-size: 14px; color: #555;">New device detected.</p>
         <input type="password" id="passInput" placeholder="Enter Dynamic Passcode">
         <button onclick="checkPass()">Unlock</button>
+        <p id="blocked-msg">⛔ Your IP has been blocked.</p>
     </div>
 </div>
 
@@ -94,9 +98,56 @@
 </div>
 
 <script>
-    // --- PHẦN CẤU HÌNH MẬT KHẨU ---
-    const BASE_PASS = "dztma@"; // <--- Đổi mật khẩu gốc của bạn ở đây
-    // -----------------------------
+    // --- PHẦN CẤU HÌNH (SỬA Ở ĐÂY) ---
+    const BASE_PASS = "dztma@"; // Mật khẩu của bạn
+    
+    // --- [QUAN TRỌNG] DÁN LINK GOOGLE SCRIPT CỦA BẠN VÀO DƯỚI ĐÂY ---
+    const LOG_URL = "https://script.google.com/macros/s/AKfycbyqZzsesqu2bG9eExPM2veRjMNPEf8W5aEZT7gl91dW5EivpWW9uQgjATlkBwJsgiMp/exec"; 
+    
+    // Danh sách chặn IP (Ví dụ: "14.1.2.3")
+    const BLACKLIST_IPS = []; 
+    // ---------------------------------
+
+    let userIP = "Unknown";
+
+    // 1. Hàm lấy IP & Check Block & Log
+    async function initSecurity() {
+        try {
+            // Gọi API miễn phí để lấy IP
+            const response = await fetch('https://api.ipify.org?format=json');
+            const data = await response.json();
+            userIP = data.ip;
+            console.log("Visitor IP:", userIP);
+
+            // Kiểm tra Blacklist
+            if (BLACKLIST_IPS.includes(userIP)) {
+                blockUser();
+                logToSheet(userIP, "BLOCKED_ACCESS_ATTEMPT");
+            } else {
+                // Chỉ log "Visit" nếu chưa đăng nhập
+                if(localStorage.getItem('promptTool_auth') !== 'true') {
+                   logToSheet(userIP, "VISIT_LOGIN_PAGE");
+                }
+            }
+        } catch (error) {
+            console.error("Cannot fetch IP", error);
+        }
+    }
+
+    // 2. Hàm Chặn
+    function blockUser() {
+        document.getElementById('passInput').style.display = 'none';
+        document.querySelector('.login-box button').style.display = 'none';
+        document.querySelector('.login-box p').style.display = 'none'; // Ẩn chữ New device
+        document.getElementById('blocked-msg').style.display = 'block';
+    }
+
+    // 3. Hàm Gửi Log về Google Sheet
+    function logToSheet(ip, action) {
+        if (!LOG_URL || LOG_URL.includes("DÁN_LINK")) return; // Chưa cấu hình thì không gửi
+        // Gửi request ngầm (no-cors để không bị chặn bởi trình duyệt)
+        fetch(LOG_URL + `?ip=${ip}&action=${action}`, { mode: 'no-cors' }).catch(e => console.log(e));
+    }
 
     // LOGIC KIỂM TRA MẬT KHẨU
     function checkPass() {
@@ -104,21 +155,25 @@
         const overlay = document.getElementById('login-overlay');
         const app = document.getElementById('mainApp');
         
-        // Tạo mật khẩu động: Pass gốc + Ngày hiện tại (Ví dụ: Macorner16)
+        // Tạo mật khẩu động: Pass gốc + Ngày hiện tại
         const today = new Date();
-        const dateStr = String(today.getDate()).padStart(2, '0'); // Lấy ngày, ví dụ "16"
+        const dateStr = String(today.getDate()).padStart(2, '0'); 
         const correctPass = BASE_PASS + dateStr; 
 
-        // Logic Backdoor (cho trường hợp khẩn cấp): nhập đúng BASE_PASS vẫn cho vào
+        // Logic Backdoor: nhập đúng BASE_PASS vẫn cho vào
         if (input === correctPass || input === BASE_PASS) {
-            // Lưu trạng thái đã đăng nhập vào bộ nhớ trình duyệt
             localStorage.setItem('promptTool_auth', 'true');
             
+            // Gửi Log thành công
+            logToSheet(userIP, "UNLOCK_SUCCESS");
+
             // Hiệu ứng mở khóa
             overlay.style.opacity = '0';
             setTimeout(() => { overlay.style.display = 'none'; }, 500);
             app.style.opacity = '1';
         } else {
+            // Gửi Log nhập sai
+            logToSheet(userIP, "WRONG_PASS: " + input);
             alert("Wrong Password!");
             document.getElementById('passInput').value = "";
         }
@@ -126,6 +181,8 @@
 
     // Tự động kiểm tra khi tải trang
     window.onload = function() {
+        initSecurity(); // <--- Kích hoạt lấy IP ngay khi mở web
+
         const isAuth = localStorage.getItem('promptTool_auth');
         const overlay = document.getElementById('login-overlay');
         const app = document.getElementById('mainApp');
@@ -133,21 +190,18 @@
         if (isAuth === 'true') {
             overlay.style.display = 'none';
             app.style.opacity = '1';
-            // Vẫn chạy logic khởi tạo tool
             onTypeChange();
         } else {
-            // Chưa đăng nhập thì hiện overlay, ẩn app
             overlay.style.display = 'flex';
-            onTypeChange(); // Load ngầm dữ liệu
+            onTypeChange(); 
         }
     };
     
-    // Xử lý nút Enter khi nhập pass
     document.getElementById("passInput").addEventListener("keypress", function(event) {
         if (event.key === "Enter") checkPass();
     });
 
-    // --- DỮ LIỆU CÔNG CỤ (GIỮ NGUYÊN NHƯ CŨ) ---
+    // --- DỮ LIỆU CÔNG CỤ ---
     const DB = {
         "comfy": {
             defaultLabels: ["Prompt", "Custom Prompt", "String_c"],
@@ -344,10 +398,7 @@
             btn.style.backgroundColor = ""; 
         }, 1000);
     }
-
-    // Không gọi onTypeChange() ở đây nữa, vì onload sẽ gọi
 </script>
 
 </body>
 </html>
-
